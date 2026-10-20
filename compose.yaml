@@ -20,9 +20,9 @@ services:
     expose:
       - "8000"
     networks:
-      - osint_internal
+      - osint-proxy
     # No public ports. Reverse proxy must join osint_internal (or shared external proxy network).
 networks:
-  osint_internal:
-    name: osint_mcp_internal
-    driver: bridge
+  osint-proxy:
+    external: true
+
