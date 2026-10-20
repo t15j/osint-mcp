@@ -21,7 +21,7 @@ services:
       - "8000"
     networks:
       - osint-proxy
-    # No public ports. Reverse proxy must join osint_internal (or shared external proxy network).
+    # No public ports. Reverse proxy must join osint-proxy (a shared external proxy network).
 networks:
   osint-proxy:
     external: true
