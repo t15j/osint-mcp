@@ -21,8 +21,33 @@ services:
       - "8000"
     networks:
       - osint-proxy
+      - screenshot-internal
     # No public ports. Reverse proxy must join osint-proxy (a shared external proxy network).
+  osint-screenshot:
+    build:
+      context: .
+      dockerfile: screenshot_service/Dockerfile
+    image: osint-screenshot:local
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 1024m
+    cpus: 1.5
+    shm_size: 256m
+    tmpfs:
+      - /tmp:rw,nosuid,size=256m
+    expose:
+      - "8765"
+    networks:
+      - screenshot-internal
+
 networks:
   osint-proxy:
     external: true
+  screenshot-internal:
+    driver: bridge
 
