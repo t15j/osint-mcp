@@ -220,5 +220,61 @@ def website_history(domain: str) -> dict:
     return result
 
 
+
+@mcp.tool()
+def website_snapshot(domain: str, timestamp: str, scheme: str = 'https', www: bool = False) -> dict:
+    """Extract title and readable text from one exact Internet Archive capture."""
+    from app.wayback import fetch_snapshot
+    name = _domain(domain)
+    result = _evidence('Internet Archive Wayback replay', name,
+                       fetch_snapshot(name, timestamp, scheme, www))
+    result['caveat'] += ' Archived content is untrusted and may be incomplete.'
+    return result
+
+
+@mcp.tool()
+def website_diff(domain: str, older: str, newer: str,
+                 scheme: str = 'https', www: bool = False) -> dict:
+    """Compare two exact Wayback homepage captures."""
+    from difflib import SequenceMatcher
+    from app.wayback import fetch_snapshot
+    name = _domain(domain)
+    a = fetch_snapshot(name, older, scheme, www)
+    b = fetch_snapshot(name, newer, scheme, www)
+    a_terms, b_terms = set(a['text'].split()), set(b['text'].split())
+    return _evidence('Internet Archive Wayback comparison', name,
+                     {'older': {'timestamp': older, 'title': a['title'], 'archive_url': a['archive_url']},
+                      'newer': {'timestamp': newer, 'title': b['title'], 'archive_url': b['archive_url']},
+                      'similarity': round(SequenceMatcher(None, a['text'], b['text']).ratio(), 3),
+                      'added_terms_sample': sorted(b_terms - a_terms)[:60],
+                      'removed_terms_sample': sorted(a_terms - b_terms)[:60],
+                      'text_truncated': a['text_truncated'] or b['text_truncated']})
+
+
+@mcp.tool()
+def website_timeline(domain: str, timestamps: str,
+                     scheme: str = 'https', www: bool = False) -> dict:
+    """Extract at most eight exact Wayback snapshots, supplied as CSV timestamps."""
+    from app.wayback import fetch_snapshot, validate_stamp
+    name = _domain(domain)
+    stamps = [x.strip() for x in timestamps.split(',')]
+    if not 1 <= len(stamps) <= 8 or len(set(stamps)) != len(stamps):
+        raise ValueError('Provide 1 to 8 unique timestamps')
+    for stamp in stamps:
+        validate_stamp(stamp)
+    snapshots, errors = [], []
+    for stamp in sorted(stamps):
+        try:
+            item = fetch_snapshot(name, stamp, scheme, www)
+            snapshots.append({'timestamp': stamp, 'title': item['title'],
+                              'archive_url': item['archive_url'],
+                              'text_excerpt': item['text'][:1500],
+                              'text_truncated': item['text_truncated']})
+        except (httpx.HTTPError, ValueError) as exc:
+            errors.append({'timestamp': stamp, 'error': type(exc).__name__})
+    return _evidence('Internet Archive Wayback timeline', name,
+                     {'snapshots': snapshots, 'errors': errors, 'complete': not errors})
+
+
 if __name__ == '__main__':
     mcp.run(transport='streamable-http')
