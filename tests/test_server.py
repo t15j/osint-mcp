@@ -53,3 +53,50 @@ def test_history(monkeypatch):
 def test_internetdb_rejects_private_ip():
     fn = server.internetdb_lookup.fn if hasattr(server.internetdb_lookup, 'fn') else server.internetdb_lookup
     with pytest.raises(ValueError): fn('10.0.0.1')
+
+
+def test_wayback_timestamp_validation():
+    from app.wayback import validate_stamp
+    assert validate_stamp('20010228123456') == '20010228123456'
+    for invalid in ('20010230abcdef', '20261301120000', '20260101', '../etc/passwd'):
+        with pytest.raises(ValueError):
+            validate_stamp(invalid)
+
+
+def test_archive_html_extraction():
+    from app.archive_html import TextExtractor
+    parser = TextExtractor()
+    parser.feed('<html><head><title>Alt</title><script>ignore me</script></head>'
+                '<body><h1>Willkommen</h1><a href="https://example.com/impressum">Impressum</a></body></html>')
+    data = parser.result()
+    assert data['title'] == 'Alt'
+    assert 'Willkommen' in data['text']
+    assert 'ignore me' not in data['text']
+    assert data['links'] == ['https://example.com/impressum']
+
+
+def test_website_diff(monkeypatch):
+    from app import wayback
+    def fake(domain, timestamp, scheme='https', www=False):
+        return {'requested_timestamp': timestamp, 'archive_url': 'https://web.archive.org/test',
+                'title': 'New' if timestamp.startswith('2025') else 'Old',
+                'text': 'hello new' if timestamp.startswith('2025') else 'hello old',
+                'text_truncated': False}
+    monkeypatch.setattr(wayback, 'fetch_snapshot', fake)
+    result = server.website_diff('example.com', '20200101000000', '20250101000000')
+    assert 'new' in result['observations']['added_terms_sample']
+    assert 'old' in result['observations']['removed_terms_sample']
+
+
+def test_timeline_partial_failure(monkeypatch):
+    from app import wayback
+    def fake(domain, timestamp, scheme='https', www=False):
+        if timestamp.startswith('2025'):
+            raise ValueError('archive missing')
+        return {'requested_timestamp': timestamp, 'archive_url': 'https://web.archive.org/test',
+                'title': 'Old', 'text': 'Old content', 'text_truncated': False}
+    monkeypatch.setattr(wayback, 'fetch_snapshot', fake)
+    result = server.website_timeline('example.com', '20200101000000,20250101000000')
+    assert len(result['observations']['snapshots']) == 1
+    assert len(result['observations']['errors']) == 1
+    assert result['observations']['complete'] is False
