@@ -144,5 +144,81 @@ def internetdb_lookup(ip_address: str) -> dict:
     return _evidence('Shodan InternetDB (public passive index)', address, filtered)
 
 
+
+def _archive_cdx(domain: str, *, subdomains: bool) -> tuple[list[dict], bool]:
+    """Bounded Wayback CDX lookup; provider failures propagate to the caller."""
+    pattern = '*.' + domain if subdomains else domain
+    url = ('https://web.archive.org/cdx/search/cdx?url='
+           + quote(pattern, safe='')
+           + '&output=json&fl=timestamp,original,statuscode'
+           + '&filter=statuscode:200&collapse=urlkey&limit=100')
+    data = _get_json(url)
+    if not isinstance(data, list) or not data:
+        return [], False
+    if not isinstance(data[0], list) or data[0][:3] != ['timestamp', 'original', 'statuscode']:
+        raise ValueError('Unexpected Wayback CDX response')
+    rows = []
+    for row in data[1:]:
+        if isinstance(row, list) and len(row) >= 3:
+            rows.append({'timestamp': str(row[0]), 'url': str(row[1])})
+    return rows[:99], len(rows) >= 99
+
+
+@mcp.tool()
+def domain_enumerate(domain: str) -> dict:
+    """Enumerate observed subdomains from ctlogs.dev and Wayback indexes; not active scanning."""
+    from urllib.parse import urlsplit
+    name = _domain(domain)
+    names = set()
+    sources = {}
+    errors = {}
+    try:
+        ct = _get_json('https://api.ctlogs.dev/v1/hosts/' + quote(name, safe=''))
+        if not isinstance(ct, dict) or not isinstance(ct.get('hosts'), list):
+            raise ValueError('Unexpected ctlogs.dev response')
+        for item in ct['hosts']:
+            if not isinstance(item, dict) or not isinstance(item.get('host'), str):
+                continue
+            host = item['host'].lower().removeprefix('*.').rstrip('.')
+            if host.endswith('.' + name) and _domain(host) == host:
+                names.add(host)
+        sources['ctlogs.dev'] = {'count': len(ct['hosts']), 'truncated': ct.get('has_next') is True}
+    except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
+        errors['ctlogs.dev'] = type(exc).__name__
+    try:
+        rows, limited = _archive_cdx(name, subdomains=True)
+        for entry in rows:
+            host = urlsplit(entry['url']).hostname
+            if host and host.endswith('.' + name):
+                try:
+                    names.add(_domain(host))
+                except ValueError:
+                    continue
+        sources['Internet Archive CDX'] = {'records_checked': len(rows), 'limited': limited}
+    except (httpx.HTTPError, ValueError, json.JSONDecodeError) as exc:
+        errors['Internet Archive CDX'] = type(exc).__name__
+    if not sources:
+        raise RuntimeError('All subdomain discovery providers failed')
+    result = _evidence('ctlogs.dev and Internet Archive CDX', name,
+                       {'subdomains': sorted(names)[:200], 'truncated': len(names) > 200
+                        or any(x.get('truncated') or x.get('limited') for x in sources.values()),
+                        'sources': sources, 'source_errors': errors})
+    result['caveat'] += ' Source coverage is incomplete; a name in an archive does not establish current DNS resolution or ownership.'
+    return result
+
+
+@mcp.tool()
+def website_history(domain: str) -> dict:
+    """List bounded historical Wayback snapshots without fetching the investigated website."""
+    name = _domain(domain)
+    # Restrict to the apex domain's archived homepage, not all archived paths.
+    rows, limited = _archive_cdx(name, subdomains=False)
+    result = _evidence('Internet Archive Wayback CDX', name,
+                       {'snapshots': rows[:30], 'limited': limited or len(rows) > 30,
+                        'archive_search_url': 'https://web.archive.org/web/*/' + name})
+    result['caveat'] += ' These are indexed historical capture references, not verified historical ownership.'
+    return result
+
+
 if __name__ == '__main__':
     mcp.run(transport='streamable-http')
