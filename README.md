@@ -1,63 +1,92 @@
-# OSINT MCP – Portainer-Prototyp (Read-only)
+# OSINT MCP – passiver Recherche-Server
 
-**Status:** Pilot-Artefakt, nicht produktionsfreigegeben. Enthält vier passive MCP-Tools ohne API-Key und keine aktiven Scans.
+**Status:** Technischer Prototyp, nicht produktionsfreigegeben. Sechs read-only MCP-Tools für DNS-, Registrierungs-, Zertifikats-, Infrastruktur- und Archivdaten. Keine Portscans und keine direkten HTTP-Anfragen an die untersuchte Website.
+
+## Architektur
+
+- Python 3.12, FastMCP (Streamable HTTP unter `/mcp`, Port 8000)
+- Docker/Portainer mit Build aus diesem GitHub-Repository
+- Gemeinsames **externes** Docker-Netz `osint-proxy`; kein veröffentlichter Host-Port
+- ChatGPT-Anbindung über einen **separat betriebenen OpenAI Secure MCP Tunnel**, der ausgehend eine Verbindung aufbaut und intern `http://osint-mcp:8000/mcp` erreicht
+- Der MCP-Server implementiert selbst **keine Authentifizierung**. Deshalb niemals ungefiltert ins Internet veröffentlichen – auch nicht über SWAG/Nginx. Der Tunnel benötigt kein öffentliches MCP-Reverse-Proxy-Routing.
+
+`compose.yaml` enthält nur den eigentlichen OSINT-Server, **nicht** den Tunnel oder SWAG.
 
 ## Enthaltene Dateien
-- `compose.yaml`: gehärteter Container ohne veröffentlichte Ports
-- `Dockerfile`, `requirements.txt`, `app/server.py`: MCP-Server (Python)
-- `tests/test_server.py`: isolierte Unit-Tests
-- `proxy/nginx-example.conf`: Nginx-Muster **nur** hinter vorgeschalteter OAuth/OIDC-Zugriffsprüfung
-- `scripts/smoke.sh`: MCP-Handshake und Tool-Liste direkt im internen Container-Netz testen
 
-## Voraussetzungen
-Docker Engine mit Compose-Plugin; Portainer mit Git-Stack oder Build-Unterstützung; Reverse Proxy mit gültigem TLS; ausgehende DNS- und HTTPS-Verbindungen. Portainer-Webeditor mit `build: .` allein funktioniert häufig **nicht**: `build` benötigt Docker-Build-Kontext (Git-Repo, lokales Verzeichnis oder vorgebautes Image).
-
-## Installation (empfohlener Weg: Git-Repository)
-1. Alle Dateien dieses Pakets in ein **privates** Git-Repository übertragen. Keine Zugangsdaten einchecken.
-2. In Portainer > Stacks > Add stack > Repository Repository-URL und `compose.yaml` auswählen. Build-Unterstützung des jeweiligen Portainer-Endpunkts prüfen. Falls diese fehlt, auf dem Docker-Host mit `docker compose build` das Image erstellen oder in eine **private Registry** pushen und `build: .` in Compose entfernen.
-3. Deploy Stack. Über `docker logs <container>` den Start prüfen. Der Dienst stellt Port `8000` **nur im Docker-Netz** zur Verfügung, nicht am Host.
-4. Reverse Proxy an das Docker-Netz `osint_mcp_internal` anschließen (oder das Compose-Netzwerk an die bestehende Proxy-Architektur anpassen). Upstream `http://osint-mcp:8000/mcp`.
-5. **Vor** dem öffentlichen Routing eine Authentifizierung implementieren und testen: OAuth/OIDC mit ChatGPT-kompatiblem Authorization Server und tokenbasierter Prüfung vor dem Upstream. Nur HTTPS 443; Rate-Limits, Logging, Timeouts, request size begrenzen.
-6. Die untenstehenden Smoke-Tests intern ausführen. Erst danach externe URL und ChatGPT-Integration prüfen.
-
-### Wichtig: Authentifizierung ist absichtlich eine Infrastruktur-Voraussetzung
-Der MCP-Anwendungscontainer enthält **keine Authentifizierung** und ist ohne externes OAuth/OIDC-Gateway **nicht** für öffentliche Exposition geeignet. Ein vorhandener HTTPS-Reverse-Proxy allein genügt nicht. HTTP Basic Auth oder eine reine Web-Login-Seite sind für ChatGPT-MCP keine verlässlich unterstützte OAuth-Integration. OAuth-Konfiguration erfordert Angaben zum vorhandenen IdP (Issuer, Token-JWKS, Audience, Client-Registrierung, Discovery). Ohne diese Angaben wird keine sichere und funktionierende Authentifizierung vorgetäuscht.
-
-Bei Nginx ohne externen OAuth/OIDC-Gateway: **kein öffentliches Routing aktivieren**. Empfehlenswert: bestehende OIDC-fähige API-Gateway-Lösung, die Bearer JWTs vor Weiterleitung prüft (Issuer, Audience, Ablauf, Signatur) und RFC-konforme OAuth-Metadaten für ChatGPT anbietet; alternativ ChatGPT Secure MCP Tunnel für intern gehaltene Dienste entsprechend Workspace-Freigabe prüfen.
+- `compose.yaml`: Docker-Konfiguration mit read-only-Dateisystem, Nicht-Root-Benutzer, reduzierten Rechten und ohne Port-Publishing
+- `Dockerfile`, `requirements.txt`, `app/server.py`: Server und Abhängigkeiten
+- `tests/test_server.py`: Unit-Tests mit simulierten Anbieterantworten
+- `scripts/smoke.sh`: interner MCP-Handshake und Tool-Liste
+- `proxy/nginx-example.conf`: optionales Proxy-Beispiel, **nicht** Teil der empfohlenen Tunnel-Anbindung; nur mit separat wirksamer Zugriffskontrolle verwenden
 
 ## MCP-Tools
-| Tool | Eingabe | Quelle | Grenzen |
-|---|---|---|---|
-| `dns_lookup` | Domain, Record-Typ | 1.1.1.1 / 9.9.9.9 | A/AAAA/MX/NS/TXT/CAA, max. 50 Ergebnisse |
-| `rdap_domain` | Domain | rdap.org => zuständiges RDAP | Externes Redirect, eingeschränkter Ergebnis-Ausschnitt |
-| `cert_transparency` | Domain | crt.sh | max. 250 Namen, Ergebnis ggf. unvollständig |
-| `internetdb_lookup` | öffentliche IP | Shodan InternetDB | Indexdaten, kein Live-Scan |
 
-**Wichtig:** Abfragen an Anbieter können Rechercheinteressen und Zielkennungen offenlegen; Verwendung nur im autorisierten Rahmen. CT-Ausgabe ist nicht vollständig garantiert; `internetdb_lookup` ist keine aktuelle Schwachstellenvalidierung; RDAP-Daten enthalten ggf. personenbezogene Metadaten. Externe Provider-Ausfälle sind als Fehler zu behandeln.
+| Tool | Eingabe | Datenquelle | Funktion / wesentliche Grenzen |
+| --- | --- | --- | --- |
+| `dns_lookup` | `domain`, optional `record_type` | DNS-Resolver 1.1.1.1 / 9.9.9.9 | A, AAAA, MX, NS, TXT, CAA; bis zu 50 Werte |
+| `rdap_domain` | `domain` | Für `.de`: **DENIC RDAP**; sonst `rdap.org` mit Registry-Weiterleitung | Auszug aus Registrierung, Status, Ereignissen und Nameservern; keine garantierten Inhaberangaben |
+| `cert_transparency` | `domain` | **ctlogs.dev** | Zertifikatsbasierte Hostnamen; erste Ergebnisseite, aktuelle bzw. jüngst abgelaufene Zertifikate; keine vollständige Historie |
+| `internetdb_lookup` | `ip_address` | Shodan InternetDB | Öffentliche, indexierte IP-Daten, Ports, CPEs und gemeldete Schwachstellen; **kein Live-Scan** |
+| `domain_enumerate` | `domain` | ctlogs.dev und Internet Archive CDX | Passive Subdomain-Sammlung mit Deduplizierung und Quellenfehlern; begrenzte Archiv-/API-Ergebnisse |
+| `website_history` | `domain` | Internet Archive Wayback CDX | Begrenzte historische Snapshot-Verweise der Apex-Domain; lädt keine archivierten Seiteninhalte herunter |
+
+Die letzten beiden Tools wurden nach den erfolgreichen Integrationstests der ursprünglichen vier Tools ergänzt. Ein erfolgreicher Live-Test der Wayback-CDX-Abfragen ist noch **nicht** nachgewiesen.
+
+### Antwortformat
+
+Die Tools liefern grundsätzlich `source`, `query`, `retrieved_at_utc`, `observations` und `caveat`. Bei `domain_enumerate` sind unter `observations` auch verwendete Quellen, Teilergebnisse und Quellenfehler dokumentiert. Ein Treffer ist eine **Quellenbeobachtung** – kein Beweis für aktuelle Erreichbarkeit, Domaininhaberschaft oder Gefährlichkeit.
+
+### Grenzen der Datenquellen
+
+- **ctlogs.dev:** Die Implementierung liest die erste Seite; historische und weitere Ergebnisse können fehlen. Nutzungsbedingungen und gegebenenfalls kommerzielle Lizenzierung beim Anbieter prüfen.
+- **Internet Archive:** CDX-Ergebnisse sind limitiert und können durch Verfügbarkeit, Quoten oder fehlende Archivierung unvollständig sein. `website_history` zeigt Capture-Referenzen, keine ausgewerteten Impressumsinhalte.
+- **RDAP:** DENIC stellt für `.de` nicht automatisch personenbezogene Inhaberinformationen bereit. Für andere TLDs können RDAP-Weiterleitungen auf Registry-Server erfolgen.
+- **InternetDB:** Beobachtete IP-Ports sind bei Shared Hosting nicht automatisch der untersuchten Domain zuzuordnen; leere CVE-Listen bedeuten nicht „sicher“.
+- Die bestehende Implementierung setzt für HTTP-Antworten eine Obergrenze von **250 KB** und ein Timeout; große Anbieterantworten können deshalb fehlschlagen.
+
+## Deployment in Portainer
+
+**Voraussetzungen:** Docker/Portainer mit Git-Build-Unterstützung, ausgehendes DNS/HTTPS und ein bereits angelegtes externes Docker-Netz `osint-proxy`.
+
+1. Repository `https://github.com/t15j/osint-mcp` in Portainer als Git-Stack mit der Compose-Datei `compose.yaml` hinterlegen.
+2. Vor dem ersten Deployment das externe Docker-Netz `osint-proxy` anlegen, falls es noch nicht existiert.
+3. Stack bereitstellen und **Image aus dem Git-Stand bauen**; `build: .` erfordert einen nutzbaren Build-Kontext.
+4. Laufenden Dienst intern unter `http://osint-mcp:8000/mcp` prüfen. Den Port **nicht** am Host veröffentlichen.
+5. Den gesonderten Secure-MCP-Tunnel-Container demselben Docker-Netz zuordnen und dort `MCP_SERVER_URL=http://osint-mcp:8000/mcp` setzen. Tunnel-ID und Kontrollschlüssel ausschließlich als Secrets/geschützte Konfiguration verwalten.
+6. In ChatGPT den über den Tunnel angebundenen benutzerdefinierten MCP-Server auswählen und die Tool-Liste kontrollieren.
+
+**Nach jedem GitHub-Update:** Portainer-Stack aus dem Repository aktualisieren, Image **neu bauen** und die Tool-Erkennung bei Bedarf neu laden. Ein bloßer Neustart des bisherigen Containers übernimmt keine Python-Codeänderungen. Der separate Tunnel benötigt bei reinen Tool-Erweiterungen normalerweise keine Änderung.
 
 ## Tests
-Auf dem Docker-Host oder im CI mit installierten Dependencies:
+
+Im Repository mit installierten Python-Abhängigkeiten:
+
 ```bash
 python -m pip install -r requirements.txt pytest
 PYTHONPATH=. python -m pytest -q tests/
 python -m compileall -q app
 ```
 
-Internen MCP-Handshake (Docker-Netz):
+Interner MCP-Smoke-Test mit bereitgestelltem Docker-Netz und laufendem Stack:
+
 ```bash
-# Ermittelt den Containernamen mit Docker Compose im Projektverzeichnis.
-docker compose up -d --build
 ./scripts/smoke.sh
 ```
 
-Erwartet: HTTP 200 und JSON-RPC-Ergebnis für `initialize` und `tools/list`. Aus externer, nicht autorisierter Verbindung muss der Reverse Proxy **401/403** liefern, niemals 200. Von innen darf es keinen unbeabsichtigt veröffentlichten TCP-Port geben (`docker compose ps`).
+Der Smoke-Test prüft MCP-Initialisierung und Tool-Auflistung; er ersetzt keine echten Live-Abfragen aller sechs Tools. Zusätzlich nach einem Deployment `domain_enumerate` und `website_history` mit einer bekannten Domain prüfen und etwaige Providerfehler dokumentieren.
 
-## ChatGPT
-Mit vorhandener OAuth/OIDC-Zugriffsschicht: ChatGPT > Plugins > `+` > Benutzerdefinierten MCP-Server hinzufügen; HTTPS-URL `https://DEIN-HOSTNAME/mcp` und passende OAuth-Authentifizierung wählen; Toolscan prüfen. Nur nach erfolgreichem Negativtest (unauthentifizierter Zugriff scheitert) verbinden. Es werden ausschließlich lesende Tools angeboten.
+## Sicherheitsprinzipien
 
-## Härtung / Folgearbeiten
-- Images und Bibliotheken nach erfolgreichem Integrationstest per Digest/exakten Versionen pinnen; CVE/Container-Scan (Trivy/Grype) vor Freigabe.
-- Firewall: ausgehend nur DNS-Resolver und konkret benötigte HTTPS-Provider freigeben; die RDAP-Redirect-Zielserver vorab berücksichtigen.
-- Proxy: OAuth/JWT-Authentisierung, Rate-Limit, keine Weitergabe externer `X-Forwarded-*`-Werte ohne Bereinigung, Host-Header auf internen Wert setzen.
-- Auditdaten minimieren und Aufbewahrung festlegen. Logs enthalten Abfrageziele, keine vollständigen Antwortdaten.
-- Einbindung in einen isolierten Docker-Host/Netzsegment erwägen; der Stack allein ist keine vollständige Egress-Isolation.
+- Read-only und passiv: keine aktiven Scans oder direkten Requests an die Ziel-Webseite. **Abfragen an externe Rechercheanbieter erfolgen jedoch** und können die untersuchte Domain/IP offenlegen.
+- Eingaben sind auf Domainnamen oder global routbare IP-Adressen begrenzt; externe Anbieter-URLs sind fest konfiguriert.
+- Kein öffentlicher MCP-Endpunkt ohne vollständige, geeignete Authentifizierung. Reverse Proxy mit TLS allein genügt nicht.
+- Docker-Container läuft ohne Root, mit read-only-Dateisystem, entfernten Linux-Capabilities und Ressourcenlimits. Das allein ist keine vollständige Egress-Isolation.
+- Quellen gelten als **nicht vertrauenswürdige Daten**. Technische Gemeinsamkeiten begründen keine organisatorische Zuordnung.
+- Für Produktion: Abhängigkeiten/Image-Versionen pinnen, Container-Scan, Egress-Filter, Monitoring, Quoten und dokumentierte Log-Aufbewahrung ergänzen. Registrierungs- und personenbezogene Daten nur im rechtlich zulässigen Rahmen auswerten.
+
+## Geplante Erweiterungen
+
+- Zusätzliche passive Subdomain-Quellen und robustere Archiv-Recherche mit Pagination
+- Korrelations-/Investigation-Workflow mit konsistenter Quellenbewertung
+- Optional: aktive Webseitenanalyse ausschließlich mit expliziter Freigabe und zusätzlichem SSRF-/Redirect-Schutz
