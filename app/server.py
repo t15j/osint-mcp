@@ -276,5 +276,33 @@ def website_timeline(domain: str, timestamps: str,
                      {'snapshots': snapshots, 'errors': errors, 'complete': not errors})
 
 
+
+@mcp.tool()
+def website_screenshot(domain: str, timestamp: str,
+                       scheme: str = 'https', www: bool = False):
+    """Render a genuine Wayback screenshot (PNG) through the isolated browser worker."""
+    import base64
+    from app.wayback import validate_stamp
+    from mcp.server.fastmcp import Image
+    name = _domain(domain)
+    stamp = validate_stamp(timestamp)
+    if scheme not in ('http', 'https') or type(www) is not bool:
+        raise ValueError('Invalid archive URL options')
+    with httpx.Client(timeout=httpx.Timeout(45, connect=3), trust_env=False) as client:
+        response = client.post('http://osint-screenshot:8765/capture',
+                               json={'domain': name, 'timestamp': stamp,
+                                     'scheme': scheme, 'www': www})
+        response.raise_for_status()
+        result = response.json()
+    if result.get('mime_type') != 'image/png' or not isinstance(result.get('png_base64'), str):
+        raise ValueError('Unexpected screenshot worker response')
+    blob = base64.b64decode(result['png_base64'], validate=True)
+    if len(blob) > 1_000_000:
+        raise ValueError('Screenshot too large')
+    LOG.info('archive_screenshot domain=%s timestamp=%s archive=%s',
+             name, stamp, result.get('archive_url', ''))
+    return Image(data=blob, format='png')
+
+
 if __name__ == '__main__':
     mcp.run(transport='streamable-http')
