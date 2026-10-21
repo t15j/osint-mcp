@@ -151,7 +151,7 @@ def _archive_cdx(domain: str, *, subdomains: bool) -> tuple[list[dict], bool]:
     url = ('https://web.archive.org/cdx/search/cdx?url='
            + quote(pattern, safe='')
            + '&output=json&fl=timestamp,original,statuscode'
-           + '&filter=statuscode:200&collapse=urlkey&limit=100')
+           + '&filter=statuscode:200&collapse=' + ('urlkey' if subdomains else 'timestamp:4') + '&limit=100')
     data = _get_json(url)
     if not isinstance(data, list) or not data:
         return [], False
