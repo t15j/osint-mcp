@@ -100,3 +100,18 @@ def test_timeline_partial_failure(monkeypatch):
     assert len(result['observations']['snapshots']) == 1
     assert len(result['observations']['errors']) == 1
     assert result['observations']['complete'] is False
+
+
+def test_screenshot_rejects_invalid_domain():
+    with pytest.raises(ValueError):
+        server.website_screenshot('127.0.0.1', '20010228110223')
+
+
+def test_screenshot_rejects_invalid_timestamp():
+    with pytest.raises(ValueError):
+        server.website_screenshot('example.com', 'invalid')
+
+
+def test_screenshot_rejects_invalid_scheme():
+    with pytest.raises(ValueError):
+        server.website_screenshot('example.com', '20010228110223', scheme='file')
