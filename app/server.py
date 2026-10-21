@@ -97,11 +97,16 @@ def rdap_domain(domain: str) -> dict:
     """Retrieve domain registration metadata from RDAP.org redirect service."""
     name = _domain(domain)
     # RDAP aggregator redirects to registry-specific servers; outbound hosts are therefore provider-selected.
-    data = _get_json('https://rdap.org/domain/' + quote(name, safe=''), redirects=True)
+    if name.endswith('.de'):
+        data = _get_json('https://rdap.denic.de/domain/' + quote(name, safe=''))
+        source = 'DENIC RDAP (rdap.denic.de)'
+    else:
+        data = _get_json('https://rdap.org/domain/' + quote(name, safe=''), redirects=True)
+        source = 'RDAP (rdap.org)'
     if not isinstance(data, dict):
         raise ValueError('Unexpected RDAP response')
     fields = {key: data.get(key) for key in ('ldhName', 'handle', 'status', 'events', 'nameservers', 'links') if key in data}
-    return _evidence('RDAP (rdap.net)', name, fields)
+    return _evidence(source, name, fields)
 
 
 @mcp.tool()
