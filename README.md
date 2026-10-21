@@ -1,6 +1,6 @@
 # OSINT MCP – passiver Recherche-Server
 
-**Status:** Technischer Prototyp, nicht produktionsfreigegeben. Neun read-only MCP-Tools für DNS-, Registrierungs-, Zertifikats-, Infrastruktur- und Archivdaten. Keine Portscans und keine direkten HTTP-Anfragen an die untersuchte Website. Historische HTML-Seiten werden ausschließlich über das Internet Archive abgerufen.
+**Status:** Technischer Prototyp, nicht produktionsfreigegeben. Zehn read-only MCP-Tools für DNS-, Registrierungs-, Zertifikats-, Infrastruktur- und Archivdaten. Keine Portscans und keine direkten HTTP-Anfragen an die untersuchte Website. Archivierte Websites werden im isolierten Browser gerendert, der nur den Internet-Archive-Host erreichen darf. Historische HTML-Seiten werden ausschließlich über das Internet Archive abgerufen.
 
 ## Architektur
 
@@ -10,10 +10,11 @@
 - ChatGPT-Anbindung über einen **separat betriebenen OpenAI Secure MCP Tunnel**, der ausgehend eine Verbindung aufbaut und intern `http://osint-mcp:8000/mcp` erreicht
 - Der MCP-Server implementiert selbst **keine Authentifizierung**. Deshalb niemals ungefiltert ins Internet veröffentlichen – auch nicht über SWAG/Nginx. Der Tunnel benötigt kein öffentliches MCP-Reverse-Proxy-Routing.
 
-`compose.yaml` enthält nur den eigentlichen OSINT-Server, **nicht** den Tunnel oder SWAG.
+`compose.yaml` enthält den MCP-Server und einen separaten Screenshot-Worker, **nicht** den Tunnel oder SWAG. Der Worker benötigt eine größere Docker-Image-Basis und bis zu 1 GB RAM.
 
 ## Enthaltene Dateien
 
+- `screenshot_service/`: separater Playwright/Chromium-Dienst zum Rendern echter Archivaufnahmen; nur intern erreichbar
 - `compose.yaml`: Docker-Konfiguration mit read-only-Dateisystem, Nicht-Root-Benutzer, reduzierten Rechten und ohne Port-Publishing
 - `Dockerfile`, `requirements.txt`, `app/server.py`: Server und Abhängigkeiten
 - `tests/test_server.py`: Unit-Tests mit simulierten Anbieterantworten
@@ -35,6 +36,10 @@
 | `website_diff` | `domain`, `older`, `newer`, optional `scheme`, `www` | Wayback-Replay | Textähnlichkeit sowie Stichproben hinzugekommener/entfallener Wörter; kein semantischer Änderungsnachweis |
 | `website_timeline` | `domain`, `timestamps`, optional `scheme`, `www` | Wayback-Replay | Bis zu acht kommaseparierte Zeitstempel; Titel und kurze Textauszüge; Teilausfälle dokumentiert |
 
+| `website_screenshot` | `domain`, `timestamp`, optional `scheme`, `www` | Wayback-Archiv via isoliertem Chromium | Echter gerenderter PNG-Screenshot (1200×800); archivierte Seiten ggf. unvollständig, JavaScript deaktiviert |
+
+Der Screenshot-Dienst benötigt einen zweiten Container (`osint-screenshot`), der ausschließlich im privaten Netzwerk `screenshot-internal` erreichbar ist. Das MCP-Tool liefert **Bilddaten** zurück, keine generierten Illustrationen. Fehlgeschlagene Archivaufrufe werden als Fehler gemeldet und nicht durch Ersatzbilder ersetzt.
+
 Die Archiv-Erweiterungen wurden nach den ursprünglichen vier Tools ergänzt. Ein vollständiger Live-Integrationstest der neuen Wayback-Replay-Tools ist noch **nicht** nachgewiesen.
 
 ### Antwortformat
@@ -44,6 +49,7 @@ Die Tools liefern grundsätzlich `source`, `query`, `retrieved_at_utc`, `observa
 ### Grenzen der Datenquellen
 
 - **ctlogs.dev:** Die Implementierung liest die erste Seite; historische und weitere Ergebnisse können fehlen. Nutzungsbedingungen und gegebenenfalls kommerzielle Lizenzierung beim Anbieter prüfen.
+- **Screenshot-Worker:** Chromium lädt nur HTTPS-Ressourcen des Internet Archive; externe Requests werden unterdrückt. Frames und Bilder funktionieren nur, soweit das Archiv diese bereitstellt und die Darstellung kein JavaScript benötigt. Keine Screenshots der aktuellen Live-Domain. Kein garantierter visuell vollständiger Snapshot. Ergebnis ist ein MCP-Bild, keine öffentlich abrufbare Bild-URL.
 - **Internet Archive:** Für `website_snapshot`, `website_diff` und `website_timeline` müssen die **exakten 14-stelligen Capture-Zeitstempel** angegeben werden (`YYYYMMDDhhmmss`), z. B. aus `website_history`. HTTP- und HTTPS- bzw. www-Varianten werden nicht automatisch gewechselt. Archiv-Weiterleitungen werden **nicht** verfolgt; deshalb kann ein im Index gelisteter Snapshot beim Replay scheitern. Archiviertes HTML wird als nicht vertrauenswürdiger Inhalt behandelt. CDX-Ergebnisse sind limitiert und können durch Verfügbarkeit, Quoten oder fehlende Archivierung unvollständig sein. `website_history` zeigt Capture-Referenzen, keine ausgewerteten Impressumsinhalte.
 - **RDAP:** DENIC stellt für `.de` nicht automatisch personenbezogene Inhaberinformationen bereit. Für andere TLDs können RDAP-Weiterleitungen auf Registry-Server erfolgen.
 - **InternetDB:** Beobachtete IP-Ports sind bei Shared Hosting nicht automatisch der untersuchten Domain zuzuordnen; leere CVE-Listen bedeuten nicht „sicher“.
@@ -55,12 +61,12 @@ Die Tools liefern grundsätzlich `source`, `query`, `retrieved_at_utc`, `observa
 
 1. Repository `https://github.com/t15j/osint-mcp` in Portainer als Git-Stack mit der Compose-Datei `compose.yaml` hinterlegen.
 2. Vor dem ersten Deployment das externe Docker-Netz `osint-proxy` anlegen, falls es noch nicht existiert.
-3. Stack bereitstellen und **Image aus dem Git-Stand bauen**; `build: .` erfordert einen nutzbaren Build-Kontext.
+3. Stack bereitstellen und **beide Images aus dem Git-Stand bauen**; `build: .` erfordert einen nutzbaren Build-Kontext.
 4. Laufenden Dienst intern unter `http://osint-mcp:8000/mcp` prüfen. Den Port **nicht** am Host veröffentlichen.
 5. Den gesonderten Secure-MCP-Tunnel-Container demselben Docker-Netz zuordnen und dort `MCP_SERVER_URL=http://osint-mcp:8000/mcp` setzen. Tunnel-ID und Kontrollschlüssel ausschließlich als Secrets/geschützte Konfiguration verwalten.
 6. In ChatGPT den über den Tunnel angebundenen benutzerdefinierten MCP-Server auswählen und die Tool-Liste kontrollieren.
 
-**Nach jedem GitHub-Update:** Portainer-Stack aus dem Repository aktualisieren, Image **neu bauen** und die Tool-Erkennung bei Bedarf neu laden. Ein bloßer Neustart des bisherigen Containers übernimmt keine Python-Codeänderungen. Der separate Tunnel benötigt bei reinen Tool-Erweiterungen normalerweise keine Änderung.
+**Nach jedem GitHub-Update:** Portainer-Stack aus dem Repository aktualisieren, Image **neu bauen** und die Tool-Erkennung bei Bedarf neu laden. Ein bloßer Neustart des bisherigen Containers übernimmt keine Python-Codeänderungen. Die Portainer-Option **Re-pull image and redeploy** darf für die lokalen Images `osint-mcp-poc:local` und `osint-screenshot:local` nicht aktiviert werden, da sie nicht in einer Registry liegen. Der separate Tunnel benötigt bei reinen Tool-Erweiterungen normalerweise keine Änderung.
 
 ## Tests
 
