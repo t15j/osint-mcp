@@ -1,6 +1,6 @@
 # OSINT MCP – passiver Recherche-Server
 
-**Status:** Technischer Prototyp, nicht produktionsfreigegeben. Sechs read-only MCP-Tools für DNS-, Registrierungs-, Zertifikats-, Infrastruktur- und Archivdaten. Keine Portscans und keine direkten HTTP-Anfragen an die untersuchte Website.
+**Status:** Technischer Prototyp, nicht produktionsfreigegeben. Neun read-only MCP-Tools für DNS-, Registrierungs-, Zertifikats-, Infrastruktur- und Archivdaten. Keine Portscans und keine direkten HTTP-Anfragen an die untersuchte Website. Historische HTML-Seiten werden ausschließlich über das Internet Archive abgerufen.
 
 ## Architektur
 
@@ -31,7 +31,11 @@
 | `domain_enumerate` | `domain` | ctlogs.dev und Internet Archive CDX | Passive Subdomain-Sammlung mit Deduplizierung und Quellenfehlern; begrenzte Archiv-/API-Ergebnisse |
 | `website_history` | `domain` | Internet Archive Wayback CDX | Begrenzte historische Snapshot-Verweise der Apex-Domain; lädt keine archivierten Seiteninhalte herunter |
 
-Die letzten beiden Tools wurden nach den erfolgreichen Integrationstests der ursprünglichen vier Tools ergänzt. Ein erfolgreicher Live-Test der Wayback-CDX-Abfragen ist noch **nicht** nachgewiesen.
+| `website_snapshot` | `domain`, `timestamp`, optional `scheme`, `www` | Internet Archive Wayback-Replay | HTML eines exakt angefragten Archivzeitpunkts, bis 100 KB; Titel, Text und bis zu 40 Links; kein JavaScript |
+| `website_diff` | `domain`, `older`, `newer`, optional `scheme`, `www` | Wayback-Replay | Textähnlichkeit sowie Stichproben hinzugekommener/entfallener Wörter; kein semantischer Änderungsnachweis |
+| `website_timeline` | `domain`, `timestamps`, optional `scheme`, `www` | Wayback-Replay | Bis zu acht kommaseparierte Zeitstempel; Titel und kurze Textauszüge; Teilausfälle dokumentiert |
+
+Die Archiv-Erweiterungen wurden nach den ursprünglichen vier Tools ergänzt. Ein vollständiger Live-Integrationstest der neuen Wayback-Replay-Tools ist noch **nicht** nachgewiesen.
 
 ### Antwortformat
 
@@ -40,7 +44,7 @@ Die Tools liefern grundsätzlich `source`, `query`, `retrieved_at_utc`, `observa
 ### Grenzen der Datenquellen
 
 - **ctlogs.dev:** Die Implementierung liest die erste Seite; historische und weitere Ergebnisse können fehlen. Nutzungsbedingungen und gegebenenfalls kommerzielle Lizenzierung beim Anbieter prüfen.
-- **Internet Archive:** CDX-Ergebnisse sind limitiert und können durch Verfügbarkeit, Quoten oder fehlende Archivierung unvollständig sein. `website_history` zeigt Capture-Referenzen, keine ausgewerteten Impressumsinhalte.
+- **Internet Archive:** Für `website_snapshot`, `website_diff` und `website_timeline` müssen die **exakten 14-stelligen Capture-Zeitstempel** angegeben werden (`YYYYMMDDhhmmss`), z. B. aus `website_history`. HTTP- und HTTPS- bzw. www-Varianten werden nicht automatisch gewechselt. Archiv-Weiterleitungen werden **nicht** verfolgt; deshalb kann ein im Index gelisteter Snapshot beim Replay scheitern. Archiviertes HTML wird als nicht vertrauenswürdiger Inhalt behandelt. CDX-Ergebnisse sind limitiert und können durch Verfügbarkeit, Quoten oder fehlende Archivierung unvollständig sein. `website_history` zeigt Capture-Referenzen, keine ausgewerteten Impressumsinhalte.
 - **RDAP:** DENIC stellt für `.de` nicht automatisch personenbezogene Inhaberinformationen bereit. Für andere TLDs können RDAP-Weiterleitungen auf Registry-Server erfolgen.
 - **InternetDB:** Beobachtete IP-Ports sind bei Shared Hosting nicht automatisch der untersuchten Domain zuzuordnen; leere CVE-Listen bedeuten nicht „sicher“.
 - Die bestehende Implementierung setzt für HTTP-Antworten eine Obergrenze von **250 KB** und ein Timeout; große Anbieterantworten können deshalb fehlschlagen.
@@ -74,7 +78,7 @@ Interner MCP-Smoke-Test mit bereitgestelltem Docker-Netz und laufendem Stack:
 ./scripts/smoke.sh
 ```
 
-Der Smoke-Test prüft MCP-Initialisierung und Tool-Auflistung; er ersetzt keine echten Live-Abfragen aller sechs Tools. Zusätzlich nach einem Deployment `domain_enumerate` und `website_history` mit einer bekannten Domain prüfen und etwaige Providerfehler dokumentieren.
+Der Smoke-Test prüft MCP-Initialisierung und Tool-Auflistung; er ersetzt keine echten Live-Abfragen aller sechs Tools. Zusätzlich nach einem Deployment `domain_enumerate`, `website_history`, `website_snapshot`, `website_diff` und `website_timeline` mit bekannten Archivzeitpunkten prüfen und etwaige Providerfehler dokumentieren.
 
 ## Sicherheitsprinzipien
 
@@ -87,6 +91,7 @@ Der Smoke-Test prüft MCP-Initialisierung und Tool-Auflistung; er ersetzt keine 
 
 ## Geplante Erweiterungen
 
+- Verbesserte Archiv-Pagination, exakte Capture-Auflösung und inhaltliche Änderungsanalyse
 - Zusätzliche passive Subdomain-Quellen und robustere Archiv-Recherche mit Pagination
 - Korrelations-/Investigation-Workflow mit konsistenter Quellenbewertung
 - Optional: aktive Webseitenanalyse ausschließlich mit expliziter Freigabe und zusätzlichem SSRF-/Redirect-Schutz
