@@ -12,12 +12,43 @@ def test_global_only():
         with pytest.raises(ValueError): server._ip(x)
 
 def test_cert_filter(monkeypatch):
-    monkeypatch.setattr(server, '_get_json', lambda url: [
-        {'name_value':'*.example.com\napi.example.com\nother.net'},
-        {'name_value':'EXAMPLE.COM'}])
-    fn = server.cert_transparency.fn if hasattr(server.cert_transparency, 'fn') else server.cert_transparency
-    result = fn('example.com')
+    monkeypatch.setattr(server, '_get_json', lambda url: {
+        'hosts': [
+            {'host': '*.example.com'}, {'host': 'api.example.com'},
+            {'host': 'badexample.com'}, {'host': 'other.net'}
+        ], 'has_next': False})
+    result = server.cert_transparency('example.com')
     assert result['observations']['dns_names'] == ['api.example.com', 'example.com']
+    assert result['observations']['truncated'] is False
+
+
+def test_enumerate_sources_and_scope(monkeypatch):
+    monkeypatch.setattr(server, '_get_json', lambda url: {
+        'hosts': [{'host': 'api.example.com'}, {'host': 'badexample.com'}],
+        'has_next': False})
+    monkeypatch.setattr(server, '_archive_cdx', lambda domain, subdomains: (
+        [{'timestamp': '20200101000000', 'url': 'https://docs.example.com/'}], False))
+    result = server.domain_enumerate('example.com')
+    assert result['observations']['subdomains'] == ['api.example.com', 'docs.example.com']
+
+
+def test_enumerate_partial_failure(monkeypatch):
+    def broken(_url):
+        raise ValueError('provider unavailable')
+    monkeypatch.setattr(server, '_get_json', broken)
+    monkeypatch.setattr(server, '_archive_cdx', lambda domain, subdomains: (
+        [{'timestamp': '20200101000000', 'url': 'https://docs.example.com/'}], False))
+    result = server.domain_enumerate('example.com')
+    assert 'ctlogs.dev' in result['observations']['source_errors']
+    assert result['observations']['subdomains'] == ['docs.example.com']
+
+
+def test_history(monkeypatch):
+    monkeypatch.setattr(server, '_archive_cdx', lambda domain, subdomains: (
+        [{'timestamp': '20190101000000', 'url': 'https://example.com/'}], False))
+    result = server.website_history('example.com')
+    assert result['observations']['snapshots'][0]['timestamp'] == '20190101000000'
+
 
 def test_internetdb_rejects_private_ip():
     fn = server.internetdb_lookup.fn if hasattr(server.internetdb_lookup, 'fn') else server.internetdb_lookup
