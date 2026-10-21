@@ -106,23 +106,26 @@ def rdap_domain(domain: str) -> dict:
 
 @mcp.tool()
 def cert_transparency(domain: str) -> dict:
-    """Find certificate transparency names via crt.sh JSON index; not proof of ownership."""
+    """Find recent certificate transparency hostnames via ctlogs.dev; not proof of ownership."""
     name = _domain(domain)
-    data = _get_json('https://crt.sh/?q=' + quote('%.' + name, safe='') + '&output=json')
-    if not isinstance(data, list):
-        raise ValueError('Unexpected crt.sh response')
+    # Anonymous endpoint: first page only, up to 100 hosts; currently valid
+    # certificates plus those expired within the last 90 days.
+    data = _get_json('https://api.ctlogs.dev/v1/hosts/' + quote(name, safe=''))
+    if not isinstance(data, dict) or not isinstance(data.get('hosts'), list):
+        raise ValueError('Unexpected ctlogs.dev response')
     names = set()
-    for item in data[:1500]:
-        for value in str(item.get('name_value', '')).lower().splitlines():
-            host = value.removeprefix('*.').rstrip('.')
-            if host == name or host.endswith('.' + name):
-                names.add(host)
-            if len(names) >= 250:
-                break
-        if len(names) >= 250:
-            break
-    return _evidence('crt.sh Certificate Transparency', name,
-                     {'dns_names': sorted(names), 'truncated': len(data) > 1500 or len(names) >= 250})
+    for item in data['hosts']:
+        if not isinstance(item, dict) or not isinstance(item.get('host'), str):
+            continue
+        host = item['host'].lower().removeprefix('*.').rstrip('.')
+        if host == name or host.endswith('.' + name):
+            names.add(host)
+    result = _evidence('ctlogs.dev Certificate Transparency', name,
+                       {'dns_names': sorted(names),
+                        'truncated': data.get('has_next') is True,
+                        'history_window_days': data.get('history_window_days', 90)})
+    result['caveat'] += ' Only the first page and current/recent certificates are covered; historical hostnames and further pages may be missing.'
+    return result
 
 
 @mcp.tool()
